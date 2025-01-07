@@ -1,13 +1,17 @@
 #![no_std]
 #![no_main]
+#![allow(async_fn_in_trait)]
 
+use core::str;
+
+//use cyw43::Control;
 use cyw43_pio::{ PioSpi, DEFAULT_CLOCK_DIVIDER };
 use defmt::*;
+use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
-use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
@@ -48,24 +52,46 @@ async fn main(spawner: Spawner) {
         p.DMA_CH0,
     );
 
+    defmt::info!("cyw43 init...");
+
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
     let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
     unwrap!(spawner.spawn(cyw43_task(runner)));
+
+    defmt::info!("... done cyw43 init. Control init...");
 
     control.init(clm).await;
     control
         .set_power_management(cyw43::PowerManagementMode::PowerSave)
         .await;
 
-    let delay = Duration::from_millis(200);
-    loop {
-        defmt::info!("Blink on");
-        control.gpio_set(0, true).await;
-        Timer::after(delay).await;
+    defmt::info!("... done Control init. Scan start...");
+    // LED on during scan
+    control.gpio_set(0, true).await;
 
-        defmt::info!("Blink off");
+    // In a block so scanner is released when done
+    {
+        let mut scanner = control.scan(Default::default()).await;
+        while let Some(bss) = scanner.next().await {
+            if let Ok(ssid_str) = str::from_utf8(&bss.ssid) {
+                info!("scanned {} == {:x}", ssid_str, bss.bssid);
+            }
+        }
+    }
+
+    defmt::info!("... done Scan. Endless loop follows.");
+
+    let blink_on_ms = Duration::from_millis(20);
+    let blink_off_ms = Duration::from_secs(2);
+
+    loop {
+        // defmt::info!("Blink on");
+        control.gpio_set(0, true).await;
+        Timer::after(blink_on_ms).await;
+
+        // defmt::info!("Blink off");
         control.gpio_set(0, false).await;
-        Timer::after(delay).await;
+        Timer::after(blink_off_ms).await;
     }
 }

@@ -4,17 +4,32 @@
 
 use core::str;
 
-//use cyw43::Control;
+use cyw43::JoinOptions;
 use cyw43_pio::{ PioSpi, DEFAULT_CLOCK_DIVIDER };
 use defmt::*;
 use embassy_executor::Spawner;
+use embassy_net::dns::DnsSocket;
+use embassy_net::tcp::client::{TcpClient, TcpClientState};
+use embassy_net::{Config, StackResources};
 use embassy_rp::bind_interrupts;
+use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_time::{Duration, Timer};
+use reqwless::client::{HttpClient, TlsConfig, TlsVerify};
+use reqwless::request::Method;
+
 use static_cell::StaticCell;
+use rand_core::RngCore;
 use {defmt_rtt as _, panic_probe as _};
+
+enum BlinkerPattern {
+    Panicked,
+    Waiting,
+    WaitingRecentError,
+    Active,
+}
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
@@ -32,11 +47,18 @@ async fn cyw43_task(
     runner.run().await
 }
 
+#[embassy_executor::task]
+async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {
+    runner.run().await
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
+
+    let mut rng = RoscRng;
 
     let pwr = Output::new(p.PIN_23, Level::Low);
     let cs = Output::new(p.PIN_25, Level::High);
@@ -52,23 +74,21 @@ async fn main(spawner: Spawner) {
         p.DMA_CH0,
     );
 
-    defmt::info!("cyw43 init...");
+    defmt::info!("@1");
 
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
-    let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
+    let (net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
     unwrap!(spawner.spawn(cyw43_task(runner)));
 
-    defmt::info!("... done cyw43 init. Control init...");
+    defmt::info!("@2");
 
     control.init(clm).await;
     control
         .set_power_management(cyw43::PowerManagementMode::PowerSave)
         .await;
-
-    defmt::info!("... done Control init. Scan start...");
-    // LED on during scan
-    control.gpio_set(0, true).await;
+    
+    defmt::info!("@3");
 
     // In a block so scanner is released when done
     {
@@ -80,18 +100,101 @@ async fn main(spawner: Spawner) {
         }
     }
 
-    defmt::info!("... done Scan. Endless loop follows.");
+    defmt::info!("@4");
 
-    let blink_on_ms = Duration::from_millis(20);
-    let blink_off_ms = Duration::from_secs(2);
+    // from example wifi_webrequests.rs
+
+    let config = Config::dhcpv4(Default::default());
+    // Use static IP configuration instead of DHCP
+    //let config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
+    //    address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 69, 2), 24),
+    //    dns_servers: Vec::new(),
+    //    gateway: Some(Ipv4Address::new(192, 168, 69, 1)),
+    //});
+
+    // Generate random seed
+    let seed = rng.next_u64();
+
+    // Init network stack
+    static RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
+    let (stack, runner) = embassy_net::new(net_device, config, RESOURCES.init(StackResources::new()), seed);
+
+    unwrap!(spawner.spawn(net_task(runner)));
 
     loop {
-        // defmt::info!("Blink on");
-        control.gpio_set(0, true).await;
-        Timer::after(blink_on_ms).await;
+        match control
+            .join(WIFI_NETWORK, JoinOptions::new(WIFI_PASSWORD.as_bytes()))
+            .await
+        {
+            Ok(_) => break,
+            Err(err) => {
+                info!("join failed with status={}", err.status);
+            }
+        }
+    }
 
-        // defmt::info!("Blink off");
-        control.gpio_set(0, false).await;
-        Timer::after(blink_off_ms).await;
+    // Wait for DHCP, not necessary when using static IP
+    info!("waiting for DHCP...");
+    while !stack.is_config_up() {
+        Timer::after_millis(100).await;
+    }
+    info!("DHCP is now up!");
+
+    info!("waiting for link up...");
+    while !stack.is_link_up() {
+        Timer::after_millis(500).await;
+    }
+    info!("Link is up!");
+
+    info!("waiting for stack to be up...");
+    stack.wait_config_up().await;
+    info!("Stack is up!");
+
+    // And now we can use it!
+
+    loop {
+        let mut rx_buffer = [0; 8192];
+        let mut tls_read_buffer = [0; 16640];
+        let mut tls_write_buffer = [0; 16640];
+
+        let client_state = TcpClientState::<1, 1024, 1024>::new();
+        let tcp_client = TcpClient::new(stack, &client_state);
+        let dns_client = DnsSocket::new(stack);
+        let tls_config = TlsConfig::new(seed, &mut tls_read_buffer, &mut tls_write_buffer, TlsVerify::None);
+
+        let mut http_client = HttpClient::new_with_tls(&tcp_client, &dns_client, tls_config);
+        let url = "https://worldtimeapi.org/api/timezone/Europe/Berlin";
+        // for non-TLS requests, use this instead:
+        // let mut http_client = HttpClient::new(&tcp_client, &dns_client);
+        // let url = "http://worldtimeapi.org/api/timezone/Europe/Berlin";
+
+        info!("connecting to {}", &url);
+
+        let mut request = match http_client.request(Method::GET, &url).await {
+            Ok(req) => req,
+            Err(e) => {
+                error!("Failed to make HTTP request: {:?}", e);
+                return; // handle the error
+            }
+        };
+
+        let response = match request.send(&mut rx_buffer).await {
+            Ok(resp) => resp,
+            Err(_e) => {
+                error!("Failed to send HTTP request");
+                return; // handle the error;
+            }
+        };
+
+        let body = match str::from_utf8(response.body().read_to_end().await.unwrap()) {
+            Ok(b) => b,
+            Err(_e) => {
+                error!("Failed to read response body");
+                return; // handle the error
+            }
+        };
+        info!("Response body: {:?}", &body);
+
+        Timer::after(Duration::from_secs(5)).await;
     }
 }

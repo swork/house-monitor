@@ -1,0 +1,10 @@
+[package]
+name = "hvac"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+float-cmp = "0.10.0"
+help = "0.0.0"
+serde = { version = "1.0.217", features = ["derive"] }
+serde-json-core = { version = "0.6.0", features = ["std"] }

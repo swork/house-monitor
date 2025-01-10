@@ -2,10 +2,8 @@
 #![no_main]
 #![allow(async_fn_in_trait)]
 
-/// This implementation of hvac_limpet runs on a Raspberry Pi Pico W
-/// microcontroller board. It monitors my Honeywell TZ-4 heat pump control
-/// panel and reports state changes to a time-series database. Network 
-/// interactions are patterned on embassy/examples/rp/src/wifi_webrequests.rs
+/// Code structure here is patterned on https://github.com/embassy-rs/embassy,
+/// examples/rp/src/wifi_webrequests.rs
 
 use core::str;
 use cyw43::JoinOptions;

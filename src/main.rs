@@ -3,9 +3,8 @@
 #![allow(async_fn_in_trait)]
 
 use core::str;
-
 use cyw43::JoinOptions;
-use cyw43_pio::{ PioSpi, DEFAULT_CLOCK_DIVIDER };
+use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_net::dns::DnsSocket;
@@ -17,11 +16,12 @@ use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_time::{Duration, Timer};
+use rand_core::RngCore;
 use reqwless::client::{HttpClient, TlsConfig, TlsVerify};
 use reqwless::request::Method;
-
-use static_cell::StaticCell;
-use rand_core::RngCore;
+use serde::Deserialize;
+use serde_json_core::de;
+use static_cell::{ConstStaticCell, StaticCell};
 use {defmt_rtt as _, panic_probe as _};
 
 enum _BlinkerPattern {
@@ -35,19 +35,10 @@ bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
 });
 
-// TODO MOVE THESE TO A SECRETS BLOCK
-const WIFI_PASSWORD: &str = "";
-const WIFI_NETWORK: &str = "";
-
 #[embassy_executor::task]
 async fn cyw43_task(
-    runner: cyw43::Runner<'static,
-    Output<'static>,
-    PioSpi<'static,
-            PIO0,
-            0,
-            DMA_CH0>>
-    ) -> ! {
+    runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
+) -> ! {
     runner.run().await
 }
 
@@ -93,8 +84,27 @@ async fn main(spawner: Spawner) {
     control
         .set_power_management(cyw43::PowerManagementMode::PowerSave)
         .await;
-    
+
     defmt::info!("@3");
+
+    #[derive(Deserialize)]
+    struct Secrets<'a> {
+        version: &'a str,
+        wifi_ssid: &'a str,
+        wifi_password: &'a str,
+        couchdb_url: &'a str,
+        couchdb_user: &'a str,
+        couchdb_password: &'a str,
+    }
+
+    let secrets = include_bytes!("../../404secrets/hvac_limpet.json");
+    let secrets = match de::from_slice::<Secrets<'_>>(secrets) {
+        Ok((r, _)) => r,
+        Err(_e) => {
+            defmt::error!("JSON secrets parse error");
+            return;
+        }
+    };
 
     // In a block so scanner is released when done
     {
@@ -127,7 +137,12 @@ async fn main(spawner: Spawner) {
 
     // Init network stack
     static RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
-    let (stack, runner) = embassy_net::new(net_device, config, RESOURCES.init(StackResources::new()), seed);
+    let (stack, runner) = embassy_net::new(
+        net_device,
+        config,
+        RESOURCES.init(StackResources::new()),
+        seed,
+    );
 
     defmt::info!("@7");
 
@@ -137,12 +152,18 @@ async fn main(spawner: Spawner) {
 
     loop {
         match control
-            .join(WIFI_NETWORK, JoinOptions::new(WIFI_PASSWORD.as_bytes()))
+            .join(
+                secrets.wifi_ssid,
+                JoinOptions::new(secrets.wifi_password.as_bytes()),
+            )
             .await
         {
             Ok(_) => break,
             Err(err) => {
-                info!("join failed with status={}", err.status);
+                info!(
+                    "join {} failed with status={}",
+                    secrets.wifi_ssid, err.status
+                );
             }
         }
     }
@@ -166,26 +187,24 @@ async fn main(spawner: Spawner) {
 
     // And now we can use it!
 
-    static RX_BUFFER: StaticCell<[u8; 4192]> = StaticCell::new();
-    let rx_buffer: &'static mut [u8; 4192] = RX_BUFFER.init([0; 4192]);
+    static RX_BUFFER: ConstStaticCell<[u8; 4192]> = ConstStaticCell::new([0; 4192]);
+    let rx_buffer: &'static mut [u8; 4192] = RX_BUFFER.take();
 
-    static TLS_READ_BUFFER: StaticCell<[u8; 16640]> = StaticCell::new();
-    let tls_read_buffer: &'static mut [u8; 16640] = TLS_READ_BUFFER.init([0; 16640]);
+    static TLS_READ_BUFFER: ConstStaticCell<[u8; 16640]> = ConstStaticCell::new([0; 16640]);
+    let tls_read_buffer: &'static mut [u8; 16640] = TLS_READ_BUFFER.take();
 
-    static TLS_WRITE_BUFFER: StaticCell<[u8; 16640]> = StaticCell::new();
-    let tls_write_buffer: &'static mut [u8; 16640] = TLS_WRITE_BUFFER.init([0; 16640]);
+    static TLS_WRITE_BUFFER: ConstStaticCell<[u8; 16640]> = ConstStaticCell::new([0; 16640]);
+    let tls_write_buffer: &'static mut [u8; 16640] = TLS_WRITE_BUFFER.take();
 
-loop {
-        // swork: consider uninitializing these buffers to save flash (does it?).
-
+    loop {
         let client_state = TcpClientState::<1, 1024, 1024>::new();
         let tcp_client = TcpClient::new(stack, &client_state);
         let dns_client = DnsSocket::new(stack);
         let tls_config = TlsConfig::new(seed, tls_read_buffer, tls_write_buffer, TlsVerify::None);
 
         let mut http_client = HttpClient::new_with_tls(&tcp_client, &dns_client, tls_config);
-//        let mut http_client = HttpClient::new(&tcp_client, &dns_client);
-        let url = "http://couchdb0.local:5984/";
+        //        let mut http_client = HttpClient::new(&tcp_client, &dns_client);
+        let url = secrets.couchdb_url;
         // for non-TLS requests, use this instead:
         // let mut http_client = HttpClient::new(&tcp_client, &dns_client);
         // let url = "http://worldtimeapi.org/api/timezone/Europe/Berlin";

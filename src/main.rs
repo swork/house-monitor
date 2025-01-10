@@ -2,6 +2,11 @@
 #![no_main]
 #![allow(async_fn_in_trait)]
 
+/// This implementation of hvac_limpet runs on a Raspberry Pi Pico W
+/// microcontroller board. It monitors my Honeywell TZ-4 heat pump control
+/// panel and reports state changes to a time-series database. Network 
+/// interactions are patterned on embassy/examples/rp/src/wifi_webrequests.rs
+
 use core::str;
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
@@ -19,17 +24,11 @@ use embassy_time::{Duration, Timer};
 use rand_core::RngCore;
 use reqwless::client::{HttpClient, TlsConfig, TlsVerify};
 use reqwless::request::Method;
-use serde::Deserialize;
-use serde_json_core::de;
 use static_cell::{ConstStaticCell, StaticCell};
 use {defmt_rtt as _, panic_probe as _};
 
-enum _BlinkerPattern {
-    Panicked,
-    Waiting,
-    WaitingRecentError,
-    Active,
-}
+mod secrets;
+use crate::secrets::get_secrets;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
@@ -49,7 +48,7 @@ async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'sta
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    defmt::info!("@0");
+    defmt::info!("main start");
 
     let p = embassy_rp::init(Default::default());
     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
@@ -71,43 +70,21 @@ async fn main(spawner: Spawner) {
         p.DMA_CH0,
     );
 
-    defmt::info!("@1");
-
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
     let (net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
     unwrap!(spawner.spawn(cyw43_task(runner)));
-
-    defmt::info!("@2");
 
     control.init(clm).await;
     control
         .set_power_management(cyw43::PowerManagementMode::PowerSave)
         .await;
 
-    defmt::info!("@3");
-
-    #[derive(Deserialize)]
-    struct Secrets<'a> {
-        version: &'a str,
-        wifi_ssid: &'a str,
-        wifi_password: &'a str,
-        couchdb_url: &'a str,
-        couchdb_user: &'a str,
-        couchdb_password: &'a str,
-    }
-
-    let secrets = include_bytes!("../../404secrets/hvac_limpet.json");
-    let secrets = match de::from_slice::<Secrets<'_>>(secrets) {
-        Ok((r, _)) => r,
-        Err(_e) => {
-            defmt::error!("JSON secrets parse error");
-            return;
-        }
-    };
+    let secrets = get_secrets();
 
     // In a block so scanner is released when done
     {
+        defmt::info!("scan");
         let mut scanner = control.scan(Default::default()).await;
         while let Some(bss) = scanner.next().await {
             if let Ok(ssid_str) = str::from_utf8(&bss.ssid) {
@@ -115,10 +92,6 @@ async fn main(spawner: Spawner) {
             }
         }
     }
-
-    defmt::info!("@4");
-
-    // from example wifi_webrequests.rs
 
     let config = Config::dhcpv4(Default::default());
     // Use static IP configuration instead of DHCP
@@ -128,12 +101,8 @@ async fn main(spawner: Spawner) {
     //    gateway: Some(Ipv4Address::new(192, 168, 69, 1)),
     //});
 
-    defmt::info!("@5");
-
     // Generate random seed
     let seed = rng.next_u64();
-
-    defmt::info!("@6");
 
     // Init network stack
     static RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
@@ -144,11 +113,7 @@ async fn main(spawner: Spawner) {
         seed,
     );
 
-    defmt::info!("@7");
-
     unwrap!(spawner.spawn(net_task(runner)));
-
-    defmt::info!("@8");
 
     loop {
         match control
@@ -158,7 +123,10 @@ async fn main(spawner: Spawner) {
             )
             .await
         {
-            Ok(_) => break,
+            Ok(_) => {
+                defmt::info!("joined wifi {}", secrets.wifi_ssid);
+                break
+            },
             Err(err) => {
                 info!(
                     "join {} failed with status={}",
@@ -218,8 +186,6 @@ async fn main(spawner: Spawner) {
                 return; // handle the error
             }
         };
-
-        info!("@9b");
 
         let response = match request.send(rx_buffer).await {
             Ok(resp) => resp,

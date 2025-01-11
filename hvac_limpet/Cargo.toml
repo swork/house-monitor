@@ -36,6 +36,7 @@ serde-json-core = "0"
 serde = { version = "1", default-features=false, features = ["derive"] }
 heapless = { version = "0.8.0", default-features = false, features = ["defmt-03"] }
 embassy-futures = { version = "0.1.1", features = ["defmt"] }
+# field_count = { version = "0.1.1", path = "/Users/steve/Code/Others/GITHUB/discosultan/field-count-swork/field_count" }
 
 [profile.dev]
 lto = true

@@ -6,6 +6,7 @@ mod app;
 /// Code structure here is patterned on https://github.com/embassy-rs/embassy,
 /// examples/rp/src/wifi_webrequests.rs
 mod secrets;
+mod transport;
 
 use core::str;
 use cyw43::JoinOptions;
@@ -149,7 +150,7 @@ async fn main(spawner: Spawner) {
     // I'd like to let app.rs specify how to assign pins,
     // rather than coordinate, but haven't figured it out yet.
     // Nor have figured out how/if p can be passed there.
-    static INPUTS: StaticCell<app::IoPins> = StaticCell::new();
+    static INPUTS: StaticCell<app::InputPinsMonitoringLeds> = StaticCell::new();
     static PIN_2_STATIC: StaticCell<Input> = StaticCell::new();
     static PIN_3_STATIC: StaticCell<Input> = StaticCell::new();
     static PIN_6_STATIC: StaticCell<Input> = StaticCell::new();
@@ -158,8 +159,8 @@ async fn main(spawner: Spawner) {
     static PIN_9_STATIC: StaticCell<Input> = StaticCell::new();
     static PIN_10_STATIC: StaticCell<Input> = StaticCell::new();
     static PIN_11_STATIC: StaticCell<Input> = StaticCell::new();
-    static PIN_12_STATIC: StaticCell<Flex> = StaticCell::new();
-    let inputs: &'static mut app::IoPins = INPUTS.init_with(|| app::IoPins {
+    //static PIN_12_STATIC: StaticCell<Flex> = StaticCell::new();
+    let inputs: &'static mut app::InputPinsMonitoringLeds = INPUTS.init_with(|| app::InputPinsMonitoringLeds {
         heat: PIN_2_STATIC.init_with(|| Input::new(p.PIN_2, Pull::Down)),
         cool: PIN_3_STATIC.init_with(|| Input::new(p.PIN_3, Pull::Down)),
         emergency: PIN_6_STATIC.init_with(|| Input::new(p.PIN_6, Pull::Down)),
@@ -168,8 +169,8 @@ async fn main(spawner: Spawner) {
         zone2: PIN_9_STATIC.init_with(|| Input::new(p.PIN_9, Pull::Down)),
         zone3: PIN_10_STATIC.init_with(|| Input::new(p.PIN_10, Pull::Down)),
         zone4: PIN_11_STATIC.init_with(|| Input::new(p.PIN_11, Pull::Down)),
-        onewire: PIN_12_STATIC.init_with(|| Flex::new(p.PIN_12)),
+        //onewire: PIN_12_STATIC.init_with(|| Flex::new(p.PIN_12)),
     });
 
-    app::run(spawner, inputs, control, stack, secrets, seed).await; // never returns
+    app::run(spawner, inputs, stack, secrets, seed).await; // never returns
 }

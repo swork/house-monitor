@@ -2,7 +2,7 @@ use defmt::*;
 use serde::Deserialize;
 use serde_json_core::de;
 
-#[derive(Deserialize, Format)]
+#[derive(Deserialize, Format, Clone, Copy)]
 pub struct Secrets<'a> {
     //    pub version: &'a str,
     pub wifi_ssid: &'a str,

@@ -34,6 +34,8 @@ rand_core = "0.6.4"
 reqwless = { version = "0.13.0", features = ["defmt"] }
 serde-json-core = "0"
 serde = { version = "1", default-features=false, features = ["derive"] }
+heapless = { version = "0.8.0", default-features = false, features = ["defmt-03"] }
+embassy-futures = { version = "0.1.1", features = ["defmt"] }
 
 [profile.dev]
 lto = true

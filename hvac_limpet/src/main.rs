@@ -2,11 +2,10 @@
 #![no_main]
 #![allow(async_fn_in_trait)]
 
+mod app;
 /// Code structure here is patterned on https://github.com/embassy-rs/embassy,
 /// examples/rp/src/wifi_webrequests.rs
-
 mod secrets;
-mod app;
 
 use core::str;
 use cyw43::JoinOptions;
@@ -16,7 +15,7 @@ use embassy_executor::Spawner;
 use embassy_net::{Config, StackResources};
 use embassy_rp::bind_interrupts;
 use embassy_rp::clocks::RoscRng;
-use embassy_rp::gpio::{Level, Output};
+use embassy_rp::gpio::{Flex, Input, Level, Output, Pull};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_time::Timer;
@@ -119,8 +118,8 @@ async fn main(spawner: Spawner) {
         {
             Ok(_) => {
                 defmt::info!("joined wifi {}", secrets.wifi_ssid);
-                break
-            },
+                break;
+            }
             Err(err) => {
                 info!(
                     "join {} failed with status={}",
@@ -147,7 +146,30 @@ async fn main(spawner: Spawner) {
     stack.wait_config_up().await;
     info!("Stack is up!");
 
-    // And now we can use it!
+    // I'd like to let app.rs specify how to assign pins,
+    // rather than coordinate, but haven't figured it out yet.
+    // Nor have figured out how/if p can be passed there.
+    static INPUTS: StaticCell<app::IoPins> = StaticCell::new();
+    static PIN_2_STATIC: StaticCell<Input> = StaticCell::new();
+    static PIN_3_STATIC: StaticCell<Input> = StaticCell::new();
+    static PIN_6_STATIC: StaticCell<Input> = StaticCell::new();
+    static PIN_7_STATIC: StaticCell<Input> = StaticCell::new();
+    static PIN_8_STATIC: StaticCell<Input> = StaticCell::new();
+    static PIN_9_STATIC: StaticCell<Input> = StaticCell::new();
+    static PIN_10_STATIC: StaticCell<Input> = StaticCell::new();
+    static PIN_11_STATIC: StaticCell<Input> = StaticCell::new();
+    static PIN_12_STATIC: StaticCell<Flex> = StaticCell::new();
+    let inputs: &'static mut app::IoPins = INPUTS.init_with(|| app::IoPins {
+        heat: PIN_2_STATIC.init_with(|| Input::new(p.PIN_2, Pull::Down)),
+        cool: PIN_3_STATIC.init_with(|| Input::new(p.PIN_3, Pull::Down)),
+        emergency: PIN_6_STATIC.init_with(|| Input::new(p.PIN_6, Pull::Down)),
+        purge: PIN_7_STATIC.init_with(|| Input::new(p.PIN_7, Pull::Down)),
+        zone1: PIN_8_STATIC.init_with(|| Input::new(p.PIN_8, Pull::Down)),
+        zone2: PIN_9_STATIC.init_with(|| Input::new(p.PIN_9, Pull::Down)),
+        zone3: PIN_10_STATIC.init_with(|| Input::new(p.PIN_10, Pull::Down)),
+        zone4: PIN_11_STATIC.init_with(|| Input::new(p.PIN_11, Pull::Down)),
+        onewire: PIN_12_STATIC.init_with(|| Flex::new(p.PIN_12)),
+    });
 
-    app::run(control, stack, secrets, seed).await;  // never returns
+    app::run(spawner, inputs, control, stack, secrets, seed).await; // never returns
 }

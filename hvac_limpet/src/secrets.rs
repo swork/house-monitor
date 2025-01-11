@@ -1,15 +1,15 @@
 use defmt::*;
-use serde_json_core::de;
 use serde::Deserialize;
+use serde_json_core::de;
 
 #[derive(Deserialize, Format)]
 pub struct Secrets<'a> {
-//    pub version: &'a str,
+    //    pub version: &'a str,
     pub wifi_ssid: &'a str,
     pub wifi_password: &'a str,
     pub couchdb_url: &'a str,
-//    pub couchdb_user: &'a str,
-//    pub couchdb_password: &'a str,
+    //    pub couchdb_user: &'a str,
+    //    pub couchdb_password: &'a str,
 }
 
 pub fn get_secrets() -> Secrets<'static> {
